@@ -1,0 +1,252 @@
+---
+title: "PS209 - Bayes - PSET1"
+author: "Igor Geyn"
+date: "4/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidybayes)
+library(cmdstanr)
+library(bayesplot)
+# library(tidybayes) ## take not of dependencies (in particular ggplot)
+
+```
+
+# Problem set 1
+
+## Q1.1
+
+Calculating the posterior probabilities of each team (i.e. LAFC and LA Galaxy scoring).
+
+### LAFC scoring:
+
+$$ p(\theta = LAFC | y) = \frac{p(y | \theta = LAFC) * p(\theta = LAFC)}{p(y)} $$
+
+$$ p(\theta = LAFC | y) = 0.5 * 0.515 = 0.2575 $$
+
+### LAG scoring:
+
+$$ p(\theta = LAG | y) = \frac{p(y | \theta = LAG) * p(\theta = LAG)}{p(y)} $$
+
+$$ p(\theta = LAFC | y) = 0.3 * 0.485 = 0.1455  $$
+
+## Q1.2
+
+Let's think about a set of different priors. We can start with the simple sandbox thing of just different quantities, which we can justify in a number of ways (and which I do below).
+
+```{r}
+
+### let's think about priors that range 
+### at some sensible-ish interval around-ish our previous prior
+
+priors = seq(0.1, 0.7, 0.05)
+
+### now let's generate posteriors
+
+posterior_fn = 
+  function(lik, prior, ...) { ## leaving open the possiblity of changing p(y)
+  lik * prior / 1
+}
+
+# e.g., we can recover the prior on LAFC from Q1.1
+posterior_fn(lik = 0.5, prior = 53/103)
+# or do some others
+posterior_fn(lik = 0.5, prior = 0.1)
+posterior_fn(lik = 0.5, prior = 0.5)
+# but what we really want is the whole sequence
+
+posteriors = tibble()
+for (prior in priors) {
+  posterior = posterior_fn(lik = 0.5, prior = prior)
+  posteriors <<- rbind(posteriors, posterior)
+  
+}
+colnames(posteriors) = 'posterior_val'
+
+as_tibble(cbind(priors, posteriors)) %>% 
+  ggplot() + 
+  geom_point(aes(x = as.double(priors), y = as.double(posterior_val))) +
+  labs(title = 'Relationship between priors and posteriors', x = 'P(Theta)', y = 'P(Theta | y)') +
+  theme_bw()
+```
+
+We can also think about a few discrete cases:
+
+- LAFC just signed Christiano Ronaldo ($p(\theta = LAFC) = 0.95$ and $p(\theta = LAG) = 0.485$)
+- it's raining and 3x as many LA Galaxy players played college soccer in the Pacific Northwest ($$p(\theta = LAFC) = 0.515$$ and $$p(\theta = LAG) = 0.85$$)
+- our likelihood and priors are both normal; **still centered on the truth but representing some uncertainty**. in particular:
+
+```{r}
+
+##### defining likelihood and priors according to normal distribution
+
+### LAFC
+prior_lafc = rnorm(n = 100, mean = 0.515, sd = 0.1) ## not TOO much uncertainty
+lik_lafc = rnorm(n = 100, mean = 0.5, sd = 0.00001) ## very certain about likelihood
+
+### LA Galaxy
+prior_lag = rnorm(n = 100, mean = 0.485, sd = 0.1) ## not TOO much uncertainty
+lik_lag = rnorm(n = 100, mean = 0.3, sd = 0.00001) ## very certain about likelihood
+
+```
+
+So then we can run the posterior generator on these distributions.
+
+```{r}
+
+library(gridExtra)
+
+##### generate posteriors over distributions
+##### doing this the lazy way
+
+posteriors = tibble()
+post_lafc = posterior_fn(lik = lik_lafc, prior = prior_lafc)
+post_lag = posterior_fn(lik = lik_lag, prior = prior_lag)
+
+# lafc_plot = as_tibble(post_lafc) %>% ggplot(aes(x = value)) + geom_density() + theme_bw()
+# lag_plot = as_tibble(post_lag) %>% ggplot(aes(x = value)) + geom_density() + theme_bw()
+
+##### and now plot
+
+grid.arrange(
+  as_tibble(post_lafc) %>% ggplot(aes(x = value)) + geom_density() + theme_bw(),
+  as_tibble(post_lag) %>% ggplot(aes(x = value)) + geom_density() + theme_bw(),
+  ncol = 2
+)
+
+```
+
+But we can also see how changing the mean around which the prior is centered changes things. (Keeping likelihood constant.)
+
+```{r}
+
+prior_calc = function(mean_inp) {
+  rnorm(n = 100, mean = mean_inp, sd = 0.1)
+}
+
+## LAFC
+
+lafc_posts = tibble()
+for (prior_mean in seq(0.1, 0.50, 0.10)) {
+  prior = as_tibble(prior_calc(mean_inp = prior_mean))
+  post_out = posterior_fn(lik = lik_lafc, prior = prior)
+  out_full = cbind(prior_mean, post_out)
+  lafc_posts = rbind(lafc_posts, out_full)
+} 
+
+lafc_plot = lafc_posts %>% 
+  ggplot(aes(x = value)) + 
+  geom_density() +
+  theme_bw() + 
+  facet_wrap(~prior_mean)
+
+## LAG
+
+lag_posts = tibble()
+for (prior_mean in seq(0.1, 0.50, 0.10)) {
+  prior = as_tibble(prior_calc(mean_inp = prior_mean))
+  post_out = posterior_fn(lik = lik_lag, prior = prior)
+  out_full = cbind(prior_mean, post_out)
+  lag_posts = rbind(lag_posts, out_full)
+} 
+
+lag_plot = lag_posts %>% 
+  ggplot(aes(x = value)) + 
+  geom_density() +
+  theme_bw() + 
+  facet_wrap(~prior_mean)
+
+grid.arrange(lafc_plot, lag_plot, nrow = 2)
+
+```
+
+
+## Q2.1
+
+Assuming it's all good to use R...
+
+```{r}
+
+prior_beta = rbeta(n = 100, shape1 = 4, shape2 = 4)
+lik_beta = sum(dbinom(0:2, 10, 0.5))
+
+post_beta = posterior_fn(lik = lik_beta, prior = prior_beta)
+
+as_tibble(post_beta) %>% 
+  ggplot(aes(x = value)) + 
+  geom_density() + theme_bw()
+
+```
+
+Can also see the prior and the posterior together.
+
+```{r}
+
+grid.arrange(
+  as_tibble(prior_beta) %>% ggplot(aes(x = value)) + geom_density()  + theme_bw(),
+  as_tibble(post_beta) %>% 
+  ggplot(aes(x = value)) + 
+  geom_density() + theme_bw(),
+  ncol = 2
+)
+
+```
+
+## Q2.2
+
+And now doing the case where we know two heads of 10 spins for sure. And we can use Stan.
+
+```{r}
+
+library(cmdstanr) ## loading just in case
+register_knitr_engine(override = FALSE) ## this is good
+
+```
+
+```{stan, output.var="mod2.2"}
+
+// I guess the above works
+
+data{
+int<lower = 0> heads;
+int<lower = 0> spins;
+}
+parameters{
+real<lower = 0, upper = 1> theta;
+}
+model{
+theta ~ beta(4, 4); // What is our prior distribution?
+heads ~ binomial(spins, theta); // How are our spins distributed?
+}
+
+
+```
+
+```{r}
+
+## and now I think we can move back into R (see above)
+## this is just lifted from the pset.
+
+# Create our data
+data_list = list(
+heads = c(0,1,2), ## REPLACE
+spins = c(10,10,10) ## REPLACE
+)
+# Assuming above model was saved as mod2.2
+fit = mod2.2$sample(
+data = data_list,
+seed = 123,
+chains = 4,
+parallel_chains = 4, #You can change this if you need to
+refresh = 500
+)
+# Plot our distribution
+bayesplot::mcmc_hist(fit$draws("theta"))
+
+```
+
+
